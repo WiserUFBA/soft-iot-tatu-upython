@@ -1,3 +1,6 @@
+
+
+
 import upip
 upip.install('umqtt.robust')
 
@@ -16,9 +19,8 @@ data = None
 
 def sub_cb(topic, msg):
   #print(topic, msg)
-  if topic==b'dev/esp32-01/REQ':
-    print(topic, msg)
-    tatu.start(data, msg)
+  if data["topicReq"] in topic:
+    tatu.main(data, msg)
 
   
 with open('config.json') as f:
@@ -50,68 +52,12 @@ c.set_callback(sub_cb)
 
 if not c.connect(clean_session=False):
   print('New session being set up')
-  c.subscribe(b'dev/esp32-01/REQ')
+  c.subscribe(str.encode(data['topicPrefix'] + deviceName + data['topicReq']))
 
 while True:
   c.wait_msg()
 
 c.disconnect()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

@@ -1,6 +1,8 @@
+
+
 import machine
 import micropython
-import time
+import utime
 import esp
 esp.osdebug(None)
 import gc
@@ -29,8 +31,8 @@ class minhaThread:
     self.topic = topic
     self.topicError = topicError
     self.pub_client = pub_client
-    self.publishTime = publishTime/1000
-    self.collectTime = collectTime/1000
+    self.publishTime = publishTime
+    self.collectTime = collectTime
 
   def start(self):
     _thread.start_new_thread(self.run, ())
@@ -100,12 +102,12 @@ def flow(deviceName, sensorName, topic, topicError, pub_client, collectTime, pub
       t = t + collectTime
       if (t >= publishTime):
         #Request: FLOW VALUE sensorName {"collect":collectTime,"publish":publishTime}
-        responseModel = {"CODE":"POST","METHOD":"FLOW","HEADER":{"NAME":deviceName},"BODY":{sensorName:listValues,"FLOW":{"collect":(collectTime*1000),"publish":(publishTime*1000)}}}
+        responseModel = {"CODE":"POST","METHOD":"FLOW","HEADER":{"NAME":deviceName},"BODY":{sensorName:listValues,"FLOW":{"collect":(collectTime),"publish":(publishTime)}}}
         response = ujson.dumps(responseModel)
         pub_client.publish(topic, response)
         t = 0
         listValues = []
-      time.sleep(collectTime)
+      utime.sleep_ms(collectTime)
   except:
     errorMessage = "There is no " + sensorName + " sensor in device " + deviceName
     errorNumber = 1
@@ -126,13 +128,13 @@ def event(deviceName, sensorName, topic, topicError, pub_client, collectTime, pu
     value = methodEvent()
 
     #Request: EVENT VALUE sensorName {"collect":collectTime}
-    responseModel = {"CODE":"POST","METHOD":"EVENT","HEADER":{"NAME":deviceName},"BODY":{sensorName:value,"EVENT":{"collect":(collectTime*1000),"publish":(publishTime*1000)}}}
+    responseModel = {"CODE":"POST","METHOD":"EVENT","HEADER":{"NAME":deviceName},"BODY":{sensorName:value,"EVENT":{"collect":(collectTime),"publish":(publishTime)}}}
 
     response = ujson.dumps(responseModel)
     pub_client.publish(topic, response)
 
     while True:
-      time.sleep(collectTime)
+      utime.sleep_ms(collectTime)
       publishTime = publishTime + collectTime
       aux = methodEvent()
       if aux!=value:
@@ -172,6 +174,9 @@ def get(deviceName, sensorName, topic, topicError, pub_client):
     pub_client.publish(topicError, response)
   
   pub_client.disconnect()
+
+
+
 
 
 

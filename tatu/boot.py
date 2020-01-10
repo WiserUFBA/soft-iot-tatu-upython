@@ -1,3 +1,5 @@
+
+
 import upip
 upip.install('umqtt.robust')
 
@@ -6,6 +8,7 @@ import machine
 import micropython
 import network
 import esp
+import utime
 import ujson
 esp.osdebug(None)
 import gc
@@ -20,68 +23,56 @@ def sub_cb(topic, msg):
   if "RES" not in topic:
     tatu.main(data, msg)
 
+
   
-with open('config.json') as f:
-  data = ujson.load(f)
-
-ssid = data['ssid']
-ssidPassword = data['ssidPassword']
-mqttBroker = data['mqttBroker']
-mqttPort = data['mqttPort']
-mqttUsername = data['mqttUsername']
-mqttPassword = data['mqttPassword']
-deviceName = data['deviceName']
-
 station = network.WLAN(network.STA_IF)
-
 station.active(True)
-station.connect(ssid, ssidPassword)
 
-while station.isconnected() == False:
-  pass
 
-print('Connection successful')
+if not station.isconnected():
+  print("Waiting for connection...")
+  while not station.isconnected():
+    with open('config.json') as f:
+      data = ujson.load(f)
+    ssid = data['ssid']
+    ssidPassword = data['ssidPassword']
+    station.connect(ssid, ssidPassword)  
+    f.close()
+    utime.sleep(1)    
+
+
 print(station.ifconfig())
 
-c = MQTTClient(deviceName + '_sub', mqttBroker)
 
-c.DEBUG = True
-c.set_callback(sub_cb)
+conn = False
 
-if not c.connect(clean_session=False):
-  print('New session being set up')
-  c.subscribe(str.encode(topicPrefix + deviceName + "/#"))
+while not conn:
+  with open('config.json') as f:
+    data = ujson.load(f)
+    
+  mqttBroker = data['mqttBroker']
+  mqttPort = data['mqttPort']
+  mqttUsername = data['mqttUsername']
+  mqttPassword = data['mqttPassword']
+  deviceName = data['deviceName']
+  c = MQTTClient(deviceName + '_sub', mqttBroker)
+  c.DEBUG = True
+  c.set_callback(sub_cb)
+  try:
+    c.connect()
+    c.subscribe(str.encode(topicPrefix + deviceName + "/#"))
+    conn = True
+    print ("Broker connected on " + mqttBroker + " URL!")
+  except:
+    print ("Broker unreachable on " + mqttBroker + " URL!")
+    utime.sleep(3)
+  f.close()
+
+
 
 while True:
   c.wait_msg()
 
 c.disconnect()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 

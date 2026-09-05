@@ -1,65 +1,58 @@
-
-
-
-import upip
-upip.install('umqtt.robust')
-
-import tatu
-import machine
-import micropython
 import network
 import esp
 import ujson
-esp.osdebug(None)
 import gc
+
+esp.osdebug(None)
 gc.collect()
+
 from umqtt.robust import MQTTClient
+import tatu
 
 data = None
 
+
 def sub_cb(topic, msg):
-  #print(topic, msg)
-  if data["topicReq"] in topic:
-    tatu.main(data, msg)
+    if data['topicReq'].encode() in topic:
+        tatu.on_message(data, topic, msg)
 
-  
+
 with open('config.json') as f:
-  data = ujson.load(f)
-
-ssid = data['ssid']
-ssidPassword = data['ssidPassword']
-mqttBroker = data['mqttBroker']
-mqttPort = data['mqttPort']
-mqttUsername = data['mqttUsername']
-mqttPassword = data['mqttPassword']
-deviceName = data['deviceName']
+    data = ujson.load(f)
 
 station = network.WLAN(network.STA_IF)
-
 station.active(True)
-station.connect(ssid, ssidPassword)
+station.connect(data['ssid'], data['ssidPassword'])
 
-while station.isconnected() == False:
-  pass
+while not station.isconnected():
+    pass
 
-print('Connection successful')
-print(station.ifconfig())
+print('Connection successful - ' + str(station.ifconfig()))
 
-c = MQTTClient(deviceName + '_sub', mqttBroker)
+deviceName = data['deviceName']
 
-c.DEBUG = True
+c = MQTTClient(
+    deviceName + '_sub',
+    data['mqttBroker'],
+    port=data['mqttPort'],
+    user=data['mqttUsername'],
+    password=data['mqttPassword'],
+)
 c.set_callback(sub_cb)
 
-if not c.connect(clean_session=False):
-  print('New session being set up')
-  c.subscribe(str.encode(data['topicPrefix'] + deviceName + data['topicReq']))
+session_present = c.connect(clean_session=False)
+if not session_present:
+    print('New session, subscribing to topics')
+    c.subscribe((data['topicPrefix'] + deviceName + data['topicReq'] + '/#').encode())
+else:
+    print('Resumed existing session')
 
-while True:
-  c.wait_msg()
+print('Device: ' + deviceName)
+for s in data.get('sensors', []):
+    print('  Sensor: ' + s['name'])
 
-c.disconnect()
-
-
-
-
-
+try:
+    while True:
+        c.wait_msg()
+finally:
+    c.disconnect()

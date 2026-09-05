@@ -4,13 +4,27 @@ MicroPython implementation of the TATU protocol for ESP32 and ESP8266 devices.
 
 TATU is a lightweight IoT protocol built on top of MQTT that lets a gateway or broker send commands to embedded devices to read sensors (GET, FLOW, EVENT) and write actuators (POST), and stop ongoing operations (STOP).
 
+This repository contains two implementations:
+
+| | `src/tatu/` | `src/tatu-async/` |
+|--|-------------|-------------------|
+| Concurrency | `_thread` (preemptive) | `uasyncio` (cooperative) |
+| MQTT library | `umqtt.robust` | `mqtt_as` (Peter Hinch) |
+| WiFi reconnection | manual | automatic (via `mqtt_as`) |
+| STOP mechanism | `StopEvent` (polling) | `task.cancel()` (immediate) |
+| RAM usage | slightly higher (locks + StopEvent) | slightly lower (no locks) |
+| ESP8266 support | yes (~2–3 concurrent ops) | yes (~4–6 concurrent ops) |
+| Maturity | stable | experimental |
+
+From the **protocol perspective both versions are identical** — same `config.json` format, same MQTT topics, same JSON request/response structure.
+
 ---
 
 ## Requirements
 
 ### Hardware
-- **ESP32** (recommended) — more RAM, better thread support
-- **ESP8266** — supported, but limited to ~2–3 concurrent operations (see [Platform notes](#platform-notes))
+- **ESP32** (recommended) — more RAM, better concurrency support
+- **ESP8266** — supported, but limited to a few concurrent operations
 
 ### Software
 - [MicroPython](https://micropython.org/download/) ≥ 1.19 for ESP32/ESP8266
@@ -22,7 +36,7 @@ TATU is a lightweight IoT protocol built on top of MQTT that lets a gateway or b
 
 ---
 
-## Quick start
+## Quick start — thread version (`src/tatu/`)
 
 ### 1. Flash MicroPython
 
@@ -49,7 +63,7 @@ import mip
 mip.install('umqtt.robust')
 ```
 
-This requires the device to be connected to WiFi first. Alternatively, install `umqtt.simple` and `umqtt.robust` manually by copying the files from the [micropython-lib](https://github.com/micropython/micropython-lib) repository.
+This requires the device to be connected to WiFi first. Alternatively, copy `umqtt.simple` and `umqtt.robust` manually from the [micropython-lib](https://github.com/micropython/micropython-lib) repository.
 
 ### 3. Configure the device
 
@@ -80,9 +94,53 @@ The device will connect to WiFi, subscribe to its MQTT topic, and wait for comma
 
 ---
 
+## Quick start — uasyncio version (`src/tatu-async/`)
+
+### 1. Flash MicroPython
+
+Same as the thread version above.
+
+### 2. Install `mqtt_as`
+
+`mqtt_as` is an async MQTT library by Peter Hinch that also manages WiFi reconnection automatically. It is not available via `mip`, so you need to download it manually:
+
+1. Download [`mqtt_as.py`](https://raw.githubusercontent.com/peterhinch/micropython-mqtt/master/mqtt_as/mqtt_as.py) from the [micropython-mqtt](https://github.com/peterhinch/micropython-mqtt) repository.
+2. Upload it to the device:
+
+```bash
+mpremote connect /dev/ttyUSB0 cp mqtt_as.py :mqtt_as.py
+```
+
+### 3. Configure the device
+
+Edit `src/tatu-async/config.json` — the format is identical to the thread version.
+
+### 4. Implement your sensors
+
+Edit `src/tatu-async/sensors.py` — the format is identical to the thread version.
+
+### 5. Upload the files
+
+```bash
+mpremote connect /dev/ttyUSB0 cp src/tatu-async/config.json :config.json
+mpremote connect /dev/ttyUSB0 cp src/tatu-async/sensors.py :sensors.py
+mpremote connect /dev/ttyUSB0 cp src/tatu-async/tatu.py :tatu.py
+mpremote connect /dev/ttyUSB0 cp src/tatu-async/boot.py :boot.py
+```
+
+### 6. Reset the device
+
+```bash
+mpremote connect /dev/ttyUSB0 reset
+```
+
+`mqtt_as` handles WiFi connection and MQTT reconnection automatically — no separate WiFi setup step is needed.
+
+---
+
 ## Configuration
 
-`src/tatu/config.json`:
+The `config.json` format is the same for both versions:
 
 ```json
 {
@@ -126,7 +184,7 @@ With the default config, the topics are:
 
 ## Adding sensors
 
-Edit `src/tatu/sensors.py`. Each function name must match an entry in the `sensors` list in `config.json`.
+Edit `sensors.py`. Each function name must match an entry in the `sensors` list in `config.json`. The same `sensors.py` works with both the thread and uasyncio versions.
 
 **Sensor (read-only):** return a value.
 
@@ -186,6 +244,8 @@ Both use the same wiring: VCC (3.3 V), GND, DATA + 10 kΩ pull-up resistor on DA
 All requests are JSON published to `{topicPrefix}{deviceName}{topicReq}/...`.  
 All responses are JSON published to `{topicPrefix}{deviceName}{topicRes}`.  
 Errors are published to `{topicPrefix}{deviceName}{topicErr}`.
+
+The protocol is identical between the thread and uasyncio versions.
 
 ### GET — one-shot read
 
@@ -270,7 +330,7 @@ Response:
 
 ### STOP — stop an ongoing operation
 
-Stops a running FLOW or EVENT thread.
+Stops a running FLOW or EVENT operation.
 
 Request:
 ```json
@@ -279,6 +339,8 @@ Request:
 
 - `target`: the method to stop (`"FLOW"` or `"EVENT"`). Defaults to `"FLOW"` if omitted.
 - `sensor`: must match the sensor name used in the original FLOW/EVENT request.
+
+In the thread version, STOP sets a flag that the thread checks on the next sleep cycle. In the uasyncio version, STOP calls `task.cancel()`, which interrupts the coroutine at the next `await asyncio.sleep()` immediately.
 
 ---
 
@@ -294,12 +356,13 @@ Published to the error topic when a sensor function fails or is not found:
 ## Platform notes
 
 ### ESP32
-Full support for all features. Multiple concurrent FLOW/EVENT operations work reliably.
+Full support for all features on both versions. Multiple concurrent FLOW/EVENT operations work reliably.
 
 ### ESP8266
-Supported, but RAM is limited (~25–30 KB heap available after WiFi + MQTT). Practical limit is **2–3 concurrent operations** (FLOW/EVENT running simultaneously). GET and POST are one-shot and barely count toward the limit.
+Supported on both versions, but RAM is limited (~25–30 KB heap available after WiFi + MQTT).
 
-All threads share a single MQTT publisher connection to minimize RAM usage (one TCP connection instead of one per thread).
+- **Thread version**: practical limit of ~2–3 concurrent operations. All threads share a single MQTT publisher connection to minimize RAM usage.
+- **uasyncio version**: cooperative scheduling has lower overhead per concurrent operation, raising the practical limit to ~4–6.
 
 ### Installing files with ampy (alternative to mpremote)
 
@@ -315,5 +378,6 @@ ampy --port /dev/ttyUSB0 put src/tatu/boot.py /boot.py
 ## Related projects
 
 - [soft-iot-tatu-python](https://github.com/WiserUFBA/soft-iot-tatu-python) — CPython version (Raspberry Pi, PC)
+- [micropython-mqtt / mqtt_as](https://github.com/peterhinch/micropython-mqtt) — async MQTT library used by the uasyncio version
 - [MicroPython documentation](https://docs.micropython.org/en/latest/)
 - [umqtt library](https://github.com/micropython/micropython-lib/tree/master/micropython/umqtt.simple)

@@ -1,0 +1,17 @@
+{
+    "deviceName": "esp32-01",
+    "ssid": "your-wifi-ssid",
+    "ssidPassword": "your-wifi-password",
+    "mqttBroker": "192.168.1.100",
+    "mqttPort": 1883,
+    "mqttUsername": "",
+    "mqttPassword": "",
+    "topicPrefix": "dev/",
+    "topicReq": "/REQ",
+    "topicRes": "/RES",
+    "topicErr": "/ERR",
+    "sensors": [
+        {"type": "integer", "name": "humiditySensor"},
+        {"type": "integer", "name": "temperatureSensor"}
+    ]
+}

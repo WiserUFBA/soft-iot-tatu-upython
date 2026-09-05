@@ -153,7 +153,31 @@ def ledActuator(value=None):
     return bool(_led.value())
 ```
 
-The included `sensors.py` reads a **DHT11** on GPIO 15. Change the pin or sensor type as needed. The `_measure()` function enforces a 2-second minimum interval between DHT reads to avoid hardware errors.
+### Sensor examples
+
+Ready-to-use `sensors.py` files are in the [`examples/`](examples/) folder:
+
+| File | Sensor | Notes |
+|------|--------|-------|
+| [`src/tatu/sensors.py`](src/tatu/sensors.py) | DHT11 on GPIO 15 | Integer values |
+| [`examples/sensors_dht22.py`](examples/sensors_dht22.py) | DHT22 on GPIO 15 | Float values, higher precision |
+
+To use an example, copy it to the device as `sensors.py`:
+```bash
+mpremote connect /dev/ttyUSB0 cp examples/sensors_dht22.py :sensors.py
+```
+
+**DHT11 vs DHT22:**
+
+| | DHT11 | DHT22 |
+|--|-------|-------|
+| Temperature range | 0–50 °C ±2 °C | -40–80 °C ±0.5 °C |
+| Humidity range | 20–90 % ±5 % | 0–100 % ±2-5 % |
+| Return type | `int` | `float` |
+| MicroPython class | `dht.DHT11` | `dht.DHT22` |
+| Minimum read interval | 2 s | 2 s |
+
+Both use the same wiring: VCC (3.3 V), GND, DATA + 10 kΩ pull-up resistor on DATA.
 
 ---
 

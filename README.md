@@ -1,6 +1,6 @@
 # soft-iot-tatu-upython
 
-MicroPython implementation of the TATU protocol for ESP32 and ESP8266 devices.
+MicroPython implementation of the TATU protocol for ESP8266 devices.
 
 TATU is a lightweight IoT protocol built on top of MQTT that lets a gateway or broker send commands to embedded devices to read sensors (GET, FLOW, EVENT) and write actuators (POST), and stop ongoing operations (STOP).
 
@@ -16,18 +16,18 @@ This repository contains two implementations:
 | ESP8266 support | yes (~2–3 concurrent ops) | yes (~4–6 concurrent ops) |
 | Maturity | stable | experimental |
 
-From the **protocol perspective both versions are identical** — same `config.json` format, same MQTT topics, same JSON request/response structure.
+From the **protocol perspective both versions are identical** — same `config.json` format, same MQTT topics, same JSON request/response structure. The same `sensors.py` works with both versions.
 
 ---
 
 ## Requirements
 
 ### Hardware
-- **ESP32** (recommended) — more RAM, better concurrency support
-- **ESP8266** — supported, but limited to a few concurrent operations
+- **ESP8266** (WeMos D1 Mini / NodeMCU) — the target hardware for this project
+- Grove Shield for ESP8266 — used with Grove sensors (DHT22, Light v1.2)
 
 ### Software
-- [MicroPython](https://micropython.org/download/) ≥ 1.19 for ESP32/ESP8266
+- [MicroPython](https://micropython.org/download/) ≥ 1.19 for ESP8266
 - An MQTT broker reachable from the device (e.g. Mosquitto)
 - One of these tools to upload files to the device:
   - [`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html) (recommended)
@@ -40,15 +40,8 @@ From the **protocol perspective both versions are identical** — same `config.j
 
 ### 1. Flash MicroPython
 
-Download the firmware for your board from https://micropython.org/download/ and flash it. Example with `esptool`:
+Download the firmware for your board from https://micropython.org/download/ and flash it:
 
-**ESP32:**
-```bash
-esptool.py --chip esp32 erase_flash
-esptool.py --chip esp32 --baud 460800 write_flash -z 0x1000 esp32-*.bin
-```
-
-**ESP8266:**
 ```bash
 esptool.py --chip esp8266 erase_flash
 esptool.py --chip esp8266 --baud 460800 write_flash --flash_size=detect 0 esp8266-*.bin
@@ -71,13 +64,13 @@ Edit `src/tatu/config.json` with your network and broker settings (see [Configur
 
 ### 4. Implement your sensors
 
-Edit `src/tatu/sensors.py` to add functions for your hardware (see [Adding sensors](#adding-sensors)).
+Copy the appropriate example from `examples/` to `sensors.py` (see [Sensor examples](#sensor-examples)), or edit `src/tatu/sensors.py` directly.
 
 ### 5. Upload the files
 
 ```bash
+mpremote connect /dev/ttyUSB0 cp examples/sensors_esp8266_grove.py :sensors.py
 mpremote connect /dev/ttyUSB0 cp src/tatu/config.json :config.json
-mpremote connect /dev/ttyUSB0 cp src/tatu/sensors.py :sensors.py
 mpremote connect /dev/ttyUSB0 cp src/tatu/tatu.py :tatu.py
 mpremote connect /dev/ttyUSB0 cp src/tatu/boot.py :boot.py
 ```
@@ -117,13 +110,13 @@ Edit `src/tatu-async/config.json` — the format is identical to the thread vers
 
 ### 4. Implement your sensors
 
-Edit `src/tatu-async/sensors.py` — the format is identical to the thread version.
+Same `sensors.py` as the thread version — copy the appropriate example from `examples/`.
 
 ### 5. Upload the files
 
 ```bash
+mpremote connect /dev/ttyUSB0 cp examples/sensors_esp8266_grove.py :sensors.py
 mpremote connect /dev/ttyUSB0 cp src/tatu-async/config.json :config.json
-mpremote connect /dev/ttyUSB0 cp src/tatu-async/sensors.py :sensors.py
 mpremote connect /dev/ttyUSB0 cp src/tatu-async/tatu.py :tatu.py
 mpremote connect /dev/ttyUSB0 cp src/tatu-async/boot.py :boot.py
 ```
@@ -144,7 +137,7 @@ The `config.json` format is the same for both versions:
 
 ```json
 {
-    "deviceName": "esp32-01",
+    "deviceName": "esp8266-grove-01",
     "ssid": "your-wifi-ssid",
     "ssidPassword": "your-wifi-password",
     "mqttBroker": "192.168.1.100",
@@ -156,15 +149,16 @@ The `config.json` format is the same for both versions:
     "topicRes": "/RES",
     "topicErr": "/ERR",
     "sensors": [
-        {"type": "integer", "name": "humiditySensor"},
-        {"type": "integer", "name": "temperatureSensor"}
+        {"type": "float", "name": "temperatureSensor"},
+        {"type": "float", "name": "humiditySensor"},
+        {"type": "integer", "name": "lightSensor"}
     ]
 }
 ```
 
 | Field | Description |
 |-------|-------------|
-| `deviceName` | Unique identifier for the device. Used in MQTT topics. |
+| `deviceName` | Unique identifier for the device. Used in MQTT topics. Convention: `esp8266-<id>`. |
 | `ssid` / `ssidPassword` | WiFi credentials. |
 | `mqttBroker` | IP address or hostname of the MQTT broker. |
 | `mqttPort` | MQTT broker port. Default: `1883`. |
@@ -176,9 +170,9 @@ The `config.json` format is the same for both versions:
 | `sensors` | List of sensor/actuator functions available on this device. Each `name` must match a function in `sensors.py`. |
 
 With the default config, the topics are:
-- Subscribe: `dev/esp32-01/REQ/#`
-- Publish responses: `dev/esp32-01/RES`
-- Publish errors: `dev/esp32-01/ERR`
+- Subscribe: `dev/esp8266-grove-01/REQ/#`
+- Publish responses: `dev/esp8266-grove-01/RES`
+- Publish errors: `dev/esp8266-grove-01/ERR`
 
 ---
 
@@ -191,8 +185,7 @@ Edit `sensors.py`. Each function name must match an entry in the `sensors` list 
 ```python
 from machine import Pin, ADC
 
-_adc = ADC(Pin(34))
-_adc.atten(ADC.ATTN_11DB)
+_adc = ADC(0)
 
 def lightSensor():
     return _adc.read()
@@ -215,13 +208,19 @@ def ledActuator(value=None):
 
 Ready-to-use `sensors.py` files are in the [`examples/`](examples/) folder:
 
-| File | Sensor | Notes |
-|------|--------|-------|
-| [`src/tatu/sensors.py`](src/tatu/sensors.py) | DHT11 on GPIO 15 | Integer values |
-| [`examples/sensors_dht22.py`](examples/sensors_dht22.py) | DHT22 on GPIO 15 | Float values, higher precision |
+| Arquivo | Hardware | Sensores / variáveis TATU | Notas |
+|---------|----------|---------------------------|-------|
+| [`src/tatu/sensors.py`](src/tatu/sensors.py) | Any ESP8266 | DHT11 on GPIO15 → `temperatureSensor`, `humiditySensor` | Default — integer values |
+| [`examples/sensors_dht22.py`](examples/sensors_dht22.py) | Any ESP8266 | DHT22 on GPIO15 → `temperatureSensor`, `humiditySensor` | Float values, higher precision |
+| [`examples/sensors_esp8266_grove.py`](examples/sensors_esp8266_grove.py) | ESP8266 + Grove Shield (WeMos D1 Mini) | DHT22 on D4/GPIO2 → `temperatureSensor`, `humiditySensor`; Light on A0 → `lightSensor` | Pronto para uso com Grove Shield; funciona tanto na versão thread quanto async |
 
 To use an example, copy it to the device as `sensors.py`:
+
 ```bash
+# ESP8266 + Grove Shield (WeMos D1 Mini) — recomendado para este projeto
+mpremote connect /dev/ttyUSB0 cp examples/sensors_esp8266_grove.py :sensors.py
+
+# Generic DHT22 (GPIO15)
 mpremote connect /dev/ttyUSB0 cp examples/sensors_dht22.py :sensors.py
 ```
 
@@ -235,7 +234,7 @@ mpremote connect /dev/ttyUSB0 cp examples/sensors_dht22.py :sensors.py
 | MicroPython class | `dht.DHT11` | `dht.DHT22` |
 | Minimum read interval | 2 s | 2 s |
 
-Both use the same wiring: VCC (3.3 V), GND, DATA + 10 kΩ pull-up resistor on DATA.
+Both use the same wiring: VCC (3.3 V), GND, DATA + 10 kΩ pull-up resistor on DATA (the Grove Shield already includes the pull-up).
 
 ---
 
@@ -257,12 +256,12 @@ Request:
 Response:
 ```json
 {
-  "header": {"method": "GET", "device": "esp32-01", "sensor": "temperatureSensor"},
+  "header": {"method": "GET", "device": "esp8266-grove-01", "sensor": "temperatureSensor"},
   "payload": {"sensors": [{"temperatureSensor": [25]}]}
 }
 ```
 
-Use `"sensor": "esp32-01"` (the device name) to read **all** sensors at once.
+Use `"sensor": "esp8266-grove-01"` (the device name) to read **all** sensors at once.
 
 ---
 
@@ -279,7 +278,7 @@ Response (published every `publish` seconds):
 ```json
 {
   "header": {
-    "method": "FLOW", "device": "esp32-01", "sensor": "temperatureSensor",
+    "method": "FLOW", "device": "esp8266-grove-01", "sensor": "temperatureSensor",
     "time": {"collect": 5, "publish": 30}
   },
   "payload": {"sensors": [{"temperatureSensor": [24, 25, 25, 26, 25, 25]}]}
@@ -302,7 +301,7 @@ Request:
 Response (published on each value change):
 ```json
 {
-  "header": {"method": "EVENT", "device": "esp32-01", "sensor": "lightSensor", "time": {"collect": 1}},
+  "header": {"method": "EVENT", "device": "esp8266-grove-01", "sensor": "lightSensor", "time": {"collect": 1}},
   "payload": {"sensors": [{"lightSensor": [842]}]}
 }
 ```
@@ -321,7 +320,7 @@ Request:
 Response:
 ```json
 {
-  "header": {"method": "POST", "device": "esp32-01", "sensor": "ledActuator", "value": true},
+  "header": {"method": "POST", "device": "esp8266-grove-01", "sensor": "ledActuator", "value": true},
   "payload": {"value": true}
 }
 ```
@@ -355,20 +354,17 @@ Published to the error topic when a sensor function fails or is not found:
 
 ## Platform notes
 
-### ESP32
-Full support for all features on both versions. Multiple concurrent FLOW/EVENT operations work reliably.
-
 ### ESP8266
-Supported on both versions, but RAM is limited (~25–30 KB heap available after WiFi + MQTT).
+Supported on both versions. RAM is limited (~25–30 KB heap available after WiFi + MQTT).
 
-- **Thread version**: practical limit of ~2–3 concurrent operations. All threads share a single MQTT publisher connection to minimize RAM usage.
+- **Thread version**: practical limit of ~2–3 concurrent FLOW/EVENT operations. All threads share a single MQTT publisher connection to minimize RAM usage.
 - **uasyncio version**: cooperative scheduling has lower overhead per concurrent operation, raising the practical limit to ~4–6.
 
 ### Installing files with ampy (alternative to mpremote)
 
 ```bash
+ampy --port /dev/ttyUSB0 put examples/sensors_esp8266_grove.py /sensors.py
 ampy --port /dev/ttyUSB0 put src/tatu/config.json /config.json
-ampy --port /dev/ttyUSB0 put src/tatu/sensors.py /sensors.py
 ampy --port /dev/ttyUSB0 put src/tatu/tatu.py /tatu.py
 ampy --port /dev/ttyUSB0 put src/tatu/boot.py /boot.py
 ```

@@ -1,23 +1,15 @@
 {
-    "deviceName": "esp32-01", 
-    "ssid": "wiser",
-    "ssidPassword": "wiser2014",
-    "mqttBroker": "192.168.1.102", 
-    "mqttPort": 1883, 
-    "mqttUsername": "",
-    "mqttPassword": "",
-    "topicErr": "/ERR", 
-    "topicPrefix": "dev/", 
-    "topicRes": "/RES", 
+    "deviceName": "esp8266-01",
+    "ssid": "YOUR_WIFI_SSID",
+    "ssidPassword": "YOUR_WIFI_PASSWORD",
+    "mqttBroker": "192.168.x.x",
+    "mqttPort": 1883,
+    "topicPrefix": "dev/",
     "topicReq": "/REQ",
+    "topicRes": "/RES",
+    "topicErr": "/ERR",
     "sensors": [
-        {
-            "type": "integer", 
-            "name": "humiditySensor"
-        }, 
-        {
-            "type": "integer", 
-            "name": "temperatureSensor"
-        }
+        {"type": "float", "name": "temperatureSensor"},
+        {"type": "float", "name": "humiditySensor"}
     ]
 }

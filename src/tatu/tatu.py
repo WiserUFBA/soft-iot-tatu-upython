@@ -4,7 +4,7 @@ _client = None
 _data = None
 _tasks = {}
 
-_MAX_BUF = 30    # amostras por sensor por buffer de FLOW
+_MAX_BUF = 30    # amostras por sensor por buffer de FLOW/EVENT janela
 _RETRY_MS = 5000  # atraso antes de nova tentativa após falha de publish
 
 
@@ -33,9 +33,12 @@ def _read(name):
     return getattr(sensors, name)()
 
 
-def _pub_err(msg):
+def _pub_err(code, message=''):
     try:
-        _client.publish(_topic(_data['topicErr']), ujson.dumps({'code': 'ERROR', 'number': 1, 'message': msg}))
+        payload = {'code': code}
+        if message:
+            payload['message'] = message
+        _client.publish(_topic(_data['topicErr']), ujson.dumps(payload))
     except OSError:
         raise
     except Exception:
@@ -76,14 +79,23 @@ def on_message(raw_msg):
         return
     if method == 'STOP':
         _do_stop(msg)
-    else:
+    elif method in ('GET', 'FLOW', 'EVENT', 'POST'):
         _do_start(msg)
+    else:
+        _pub_err('UNKNOWN_METHOD', method)
 
 
 def _do_stop(msg):
     target = msg.get('target', 'FLOW')
     sensor = msg.get('sensor', '')
-    _tasks.pop(_tid(target, sensor), None)
+    if not sensor:
+        _pub_err('INVALID_PARAMS', 'STOP requires sensor field')
+        return
+    tid = _tid(target, sensor)
+    if tid not in _tasks:
+        _pub_err('STOP_NOT_FOUND', target + ' not found for sensor: ' + sensor)
+        return
+    _tasks.pop(tid)
 
 
 def _do_start(msg):
@@ -96,7 +108,7 @@ def _do_start(msg):
     if method == 'GET':
         sl = _sensor_list(sensor_name)
         if not sl:
-            _pub_err('Sensor not found: ' + sensor_name)
+            _pub_err('SENSOR_NOT_FOUND', sensor_name)
             return
         try:
             data = {s['name']: [_read(s['name'])] for s in sl}
@@ -106,22 +118,22 @@ def _do_start(msg):
         except OSError:
             raise
         except Exception as e:
-            _pub_err(str(e))
+            _pub_err('SENSOR_READ_ERROR', str(e))
 
     elif method == 'FLOW':
         sl = _sensor_list(sensor_name)
         if not sl:
-            _pub_err('Sensor not found: ' + sensor_name)
+            _pub_err('SENSOR_NOT_FOUND', sensor_name)
             return
         time_cfg = msg.get('time', {})
         try:
             collect_ms = int(time_cfg.get('collect', 1)) * 1000
             publish_ms = int(time_cfg.get('publish', time_cfg.get('collect', 1))) * 1000
         except Exception:
-            _pub_err('Invalid time parameters')
+            _pub_err('INVALID_PARAMS', 'Invalid time parameters')
             return
         if not _validate_periods(collect_ms, publish_ms):
-            _pub_err('Invalid periods: collect=' + str(collect_ms // 1000) + ' publish=' + str(publish_ms // 1000))
+            _pub_err('INVALID_PARAMS', 'collect=' + str(collect_ms // 1000) + ' publish=' + str(publish_ms // 1000))
             return
         task = _new_metrics(now)
         task.update({
@@ -136,16 +148,20 @@ def _do_start(msg):
     elif method == 'EVENT':
         sl = _sensor_list(sensor_name)
         if not sl:
-            _pub_err('Sensor not found: ' + sensor_name)
+            _pub_err('SENSOR_NOT_FOUND', sensor_name)
             return
         time_cfg = msg.get('time', {})
         try:
             collect_ms = int(time_cfg.get('collect', 1)) * 1000
+            publish_ms = int(time_cfg.get('publish', 0)) * 1000
         except Exception:
-            _pub_err('Invalid time parameters')
+            _pub_err('INVALID_PARAMS', 'Invalid time parameters')
             return
         if collect_ms <= 0:
-            _pub_err('Invalid collect period')
+            _pub_err('INVALID_PARAMS', 'collect must be > 0')
+            return
+        if publish_ms > 0 and publish_ms < collect_ms:
+            _pub_err('INVALID_PARAMS', 'publish must be >= collect')
             return
         last = {}
         for s in sl:
@@ -157,10 +173,27 @@ def _do_start(msg):
         task.update({
             'method': 'EVENT', 'sensor': sensor_name, 'sl': sl,
             'collect_ms': collect_ms,
+            'publish_ms': publish_ms,
             'next_collect': utime.ticks_add(now, collect_ms),
+            'next_publish': utime.ticks_add(now, publish_ms) if publish_ms > 0 else 0,
+            'buf': {s['name']: [] for s in sl} if publish_ms > 0 else None,
             'last': last,
         })
         _tasks[_tid('EVENT', sensor_name)] = task
+        # publica valor inicial como referência
+        initial = {k: v for k, v in last.items() if v is not None}
+        if initial:
+            try:
+                header = {
+                    'method': 'EVENT', 'device': device, 'sensor': sensor_name,
+                    'time': {'collect': collect_ms // 1000, 'publish': publish_ms // 1000},
+                }
+                payload = {'sensors': [{k: [v]} for k, v in initial.items()]}
+                _client.publish(topic, ujson.dumps({'header': header, 'payload': payload}))
+            except OSError:
+                raise
+            except Exception:
+                pass
 
     elif method == 'POST':
         value = msg.get('value')
@@ -173,7 +206,7 @@ def _do_start(msg):
         except OSError:
             raise
         except Exception as e:
-            _pub_err(str(e))
+            _pub_err('SENSOR_READ_ERROR', str(e))
 
 
 def _tick_flow(task, now, device, topic):
@@ -227,24 +260,55 @@ def _tick_event(task, now, device, topic):
 
         if changed:
             task['last'] = new_vals
+            task['samples'] += 1
+            if task['publish_ms'] == 0:
+                # modo imediato: publica na mudança
+                header = {
+                    'method': 'EVENT', 'device': device, 'sensor': task['sensor'],
+                    'time': {'collect': task['collect_ms'] // 1000, 'publish': 0},
+                }
+                payload = {'sensors': [{k: [v]} for k, v in new_vals.items()]}
+                try:
+                    _client.publish(topic, ujson.dumps({'header': header, 'payload': payload}))
+                except OSError:
+                    task['errors'] += 1
+                    task['total_errors'] += 1
+                    task['next_collect'] = utime.ticks_add(now, _RETRY_MS)
+                    raise
+                task['last_publish'] = now
+                task['errors'] = 0
+            else:
+                # modo janela: bufferiza só os que mudaram
+                for k, v in new_vals.items():
+                    buf = task['buf'][k]
+                    if len(buf) < _MAX_BUF:
+                        buf.append(v)
+                    else:
+                        task['dropped'] += 1
+
+        task['last_collect'] = now
+        task['next_collect'] = _advance_deadline(task['next_collect'], task['collect_ms'], now)
+
+    if task['publish_ms'] > 0 and utime.ticks_diff(now, task['next_publish']) >= 0:
+        has_data = any(task['buf'][s['name']] for s in task['sl'])
+        if has_data:
             header = {
                 'method': 'EVENT', 'device': device, 'sensor': task['sensor'],
-                'time': {'collect': task['collect_ms'] // 1000},
+                'time': {'collect': task['collect_ms'] // 1000, 'publish': task['publish_ms'] // 1000},
             }
-            payload = {'sensors': [{k: [v]} for k, v in new_vals.items()]}
+            payload = {'sensors': [{k: list(v)} for k, v in task['buf'].items()]}
             try:
                 _client.publish(topic, ujson.dumps({'header': header, 'payload': payload}))
             except OSError:
                 task['errors'] += 1
                 task['total_errors'] += 1
-                task['next_collect'] = utime.ticks_add(now, _RETRY_MS)
+                task['next_publish'] = utime.ticks_add(now, _RETRY_MS)
                 raise
             task['last_publish'] = now
-            task['samples'] += 1
             task['errors'] = 0
-
-        task['last_collect'] = now
-        task['next_collect'] = _advance_deadline(task['next_collect'], task['collect_ms'], now)
+            for name in task['buf']:
+                task['buf'][name] = []
+        task['next_publish'] = _advance_deadline(task['next_publish'], task['publish_ms'], now)
 
 
 def tick():

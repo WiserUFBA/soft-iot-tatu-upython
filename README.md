@@ -227,20 +227,43 @@ Runs continuously until a STOP command is received.
 
 ### EVENT — change detection
 
-Polls the sensor every `collect` seconds and publishes only when the value changes.
+Polls the sensor every `collect` seconds and publishes when the value changes. The current value is published immediately on creation as a reference baseline.
 
-**Constraints:** `collect` must be a positive integer. Invalid values produce an error on `/ERR` and the task is not created.
+**Constraints:** `collect` must be a positive integer and `publish` (if given) must be ≥ `collect`. Invalid values produce an error on `/ERR` and the task is not created.
+
+#### Immediate mode (`publish` omitted or `0`)
+
+Publishes as soon as a change is detected.
 
 Request:
 ```json
 {"method": "EVENT", "sensor": "lightSensor", "time": {"collect": 1}}
 ```
 
-Response (published on each value change):
+Response on creation (initial value):
 ```json
 {
-  "header": {"method": "EVENT", "device": "esp8266-01", "sensor": "lightSensor", "time": {"collect": 1}},
+  "header": {"method": "EVENT", "device": "esp8266-01", "sensor": "lightSensor", "time": {"collect": 1, "publish": 0}},
   "payload": {"sensors": [{"lightSensor": [842]}]}
+}
+```
+
+Response on each subsequent change (same header format).
+
+#### Windowed mode (`publish` > 0)
+
+Buffers only the values that changed within the window and publishes them in a single batch every `publish` seconds. Skips the publish if nothing changed in the window.
+
+Request:
+```json
+{"method": "EVENT", "sensor": "lightSensor", "time": {"collect": 1, "publish": 30}}
+```
+
+Response every 30 s (only if changes occurred):
+```json
+{
+  "header": {"method": "EVENT", "device": "esp8266-01", "sensor": "lightSensor", "time": {"collect": 1, "publish": 30}},
+  "payload": {"sensors": [{"lightSensor": [842, 901, 876]}]}
 }
 ```
 
@@ -275,16 +298,24 @@ Request:
 ```
 
 - `target`: the method to stop (`"FLOW"` or `"EVENT"`). Defaults to `"FLOW"` if omitted.
-- `sensor`: must match the sensor name used in the original FLOW/EVENT request.
+- `sensor`: required — must match the sensor name used in the original FLOW/EVENT request. Omitting it produces a `INVALID_PARAMS` error. If the target task is not found, produces a `STOP_NOT_FOUND` error.
 
 ---
 
 ### Error response
 
-Published to the error topic when a sensor function fails or is not found:
+Published to `/ERR` when a request cannot be fulfilled:
 ```json
-{"code": "ERROR", "number": 1, "message": "Sensor not found: unknownSensor"}
+{"code": "SENSOR_NOT_FOUND", "message": "unknownSensor"}
 ```
+
+| Code | Cause |
+|---|---|
+| `SENSOR_NOT_FOUND` | Sensor name not in `config.json` |
+| `INVALID_PARAMS` | Missing or invalid `time` fields; STOP without `sensor` |
+| `UNKNOWN_METHOD` | Unrecognised `method` value |
+| `STOP_NOT_FOUND` | STOP target task is not running |
+| `SENSOR_READ_ERROR` | Exception while reading or writing the sensor |
 
 ---
 

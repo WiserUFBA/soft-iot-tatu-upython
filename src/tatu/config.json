@@ -1,8 +1,8 @@
 {
     "deviceName": "esp8266-01",
-    "ssid": "your-wifi-ssid",
-    "ssidPassword": "your-wifi-password",
-    "mqttBroker": "192.168.1.100",
+    "ssid": "YOUR_SSID",
+    "ssidPassword": "YOUR_WIFI_PASSWORD",
+    "mqttBroker": "YOUR_BROKER_IP",
     "mqttPort": 1883,
     "mqttUsername": "",
     "mqttPassword": "",

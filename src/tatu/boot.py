@@ -1,4 +1,4 @@
-import ujson, network, utime, esp, gc, socket, select
+import ujson, network, utime, esp, gc
 from umqtt.simple import MQTTClient
 import tatu
 
@@ -15,27 +15,14 @@ def _connect_wifi():
     utime.sleep_ms(200)
     sta.active(True)
     gc.collect()
-    print('ssid:', _cfg['ssid'])
     sta.connect(_cfg['ssid'], _cfg['ssidPassword'])
     for _ in range(15):
         utime.sleep(1)
         if sta.isconnected():
-            print('wifi ok', sta.ifconfig())
+            print('wifi ok', sta.ifconfig()[0])
             return True
-    print('wifi: no ip')
+    print('wifi sem ip')
     return False
-
-
-def _broker_ok():
-    s = socket.socket()
-    s.setblocking(False)
-    try:
-        s.connect((_cfg['mqttBroker'], _cfg['mqttPort']))
-    except OSError:
-        pass
-    _, w, _ = select.select([], [s], [], 5)
-    s.close()
-    return bool(w)
 
 
 client = None
@@ -54,7 +41,6 @@ def _mqtt_connect():
             pass
         client = None
     gc.collect()
-    print('mqtt connect...')
     c = MQTTClient(
         _cfg['deviceName'],
         _cfg['mqttBroker'],
@@ -72,12 +58,25 @@ def _mqtt_connect():
     print('mqtt ok, subscribed', sub)
 
 
-_connect_wifi()
-gc.collect()
-print('heap free:', gc.mem_free())
-print('broker reachable:', _broker_ok())
+def _boot_connect():
+    delay = 2
+    while True:
+        if not _connect_wifi():
+            print('wifi falhou, retry em', delay, 's')
+            utime.sleep(delay)
+            delay = min(30, delay * 2)
+            continue
+        try:
+            _mqtt_connect()
+            return
+        except Exception as e:
+            print('mqtt boot err:', e)
+            utime.sleep(delay)
+            delay = min(30, delay * 2)
 
-_mqtt_connect()
+
+print('heap livre:', gc.mem_free())
+_boot_connect()
 
 _dead_count = 0
 _last_ping_ms = utime.ticks_ms()
@@ -85,21 +84,26 @@ _PING_MS = 30000
 
 while True:
     now = utime.ticks_ms()
-    try:
-        client.check_msg()
-        tatu.tick()
-        _dead_count = 0
-    except OSError as e:
-        if e.args[0] != -1:
+
+    if client is None:
+        _dead_count += 1
+    else:
+        try:
+            client.check_msg()
+            tatu.tick()
+            _dead_count = 0
+        except OSError as e:
+            if e.args[0] != -1:
+                # -1 = EAGAIN (sem dados, normal em socket não-bloqueante)
+                print('loop err:', e)
+                _dead_count += 1
+            gc.collect()
+        except Exception as e:
             print('loop err:', e)
             _dead_count += 1
-        gc.collect()
-    except Exception as e:
-        print('loop err:', e)
-        _dead_count += 1
-        gc.collect()
+            gc.collect()
 
-    if utime.ticks_diff(now, _last_ping_ms) >= _PING_MS:
+    if client is not None and utime.ticks_diff(now, _last_ping_ms) >= _PING_MS:
         try:
             client.ping()
         except Exception:
@@ -108,7 +112,7 @@ while True:
 
     if _dead_count >= 3:
         _dead_count = 0
-        print('reconnecting...')
+        print('reconectando...')
         sta = network.WLAN(network.STA_IF)
         if not sta.isconnected():
             _connect_wifi()
@@ -116,7 +120,7 @@ while True:
             _mqtt_connect()
             _last_ping_ms = utime.ticks_ms()
         except Exception as e2:
-            print('reconnect err:', e2)
+            print('reconexao err:', e2)
             utime.sleep(5)
 
     utime.sleep_ms(200)

@@ -29,7 +29,7 @@ client = None
 
 
 def _on_msg(topic, msg):
-    tatu.on_message(_cfg, topic, msg)
+    tatu.on_message(msg)
 
 
 def _mqtt_connect():

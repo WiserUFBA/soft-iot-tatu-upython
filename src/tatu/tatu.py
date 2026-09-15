@@ -37,7 +37,7 @@ def _pub_err(msg):
     try:
         _client.publish(_topic(_data['topicErr']), ujson.dumps({'code': 'ERROR', 'number': 1, 'message': msg}))
     except OSError:
-        raise  # falha de transporte → propaga para boot.py
+        raise
     except Exception:
         pass
 
@@ -54,7 +54,19 @@ def _validate_periods(collect_ms, publish_ms):
     return collect_ms > 0 and publish_ms >= collect_ms
 
 
-def on_message(cfg, topic, raw_msg):
+def _new_metrics(now):
+    return {
+        'created_at': now,
+        'last_collect': 0,
+        'last_publish': 0,
+        'samples': 0,
+        'dropped': 0,
+        'errors': 0,
+        'total_errors': 0,
+    }
+
+
+def on_message(raw_msg):
     try:
         msg = ujson.loads(raw_msg)
     except Exception:
@@ -92,7 +104,7 @@ def _do_start(msg):
             payload = {'sensors': [{k: v} for k, v in data.items()]}
             _client.publish(topic, ujson.dumps({'header': header, 'payload': payload}))
         except OSError:
-            raise  # falha de transporte → propaga para boot.py
+            raise
         except Exception as e:
             _pub_err(str(e))
 
@@ -111,13 +123,15 @@ def _do_start(msg):
         if not _validate_periods(collect_ms, publish_ms):
             _pub_err('Invalid periods: collect=' + str(collect_ms // 1000) + ' publish=' + str(publish_ms // 1000))
             return
-        _tasks[_tid('FLOW', sensor_name)] = {
+        task = _new_metrics(now)
+        task.update({
             'method': 'FLOW', 'sensor': sensor_name, 'sl': sl,
             'collect_ms': collect_ms, 'publish_ms': publish_ms,
             'next_collect': utime.ticks_add(now, collect_ms),
             'next_publish': utime.ticks_add(now, publish_ms),
             'buf': {s['name']: [] for s in sl},
-        }
+        })
+        _tasks[_tid('FLOW', sensor_name)] = task
 
     elif method == 'EVENT':
         sl = _sensor_list(sensor_name)
@@ -139,12 +153,14 @@ def _do_start(msg):
                 last[s['name']] = _read(s['name'])
             except Exception:
                 last[s['name']] = None
-        _tasks[_tid('EVENT', sensor_name)] = {
+        task = _new_metrics(now)
+        task.update({
             'method': 'EVENT', 'sensor': sensor_name, 'sl': sl,
             'collect_ms': collect_ms,
             'next_collect': utime.ticks_add(now, collect_ms),
             'last': last,
-        }
+        })
+        _tasks[_tid('EVENT', sensor_name)] = task
 
     elif method == 'POST':
         value = msg.get('value')
@@ -155,7 +171,7 @@ def _do_start(msg):
             header = {'method': 'POST', 'device': device, 'sensor': sensor_name, 'value': result}
             _client.publish(topic, ujson.dumps({'header': header, 'payload': {'value': result}}))
         except OSError:
-            raise  # falha de transporte → propaga para boot.py
+            raise
         except Exception as e:
             _pub_err(str(e))
 
@@ -168,8 +184,12 @@ def _tick_flow(task, now, device, topic):
                 buf = task['buf'][s['name']]
                 if len(buf) < _MAX_BUF:
                     buf.append(val)
+                    task['samples'] += 1
+                else:
+                    task['dropped'] += 1
             except Exception:
-                pass  # falha de sensor: mantém buffer atual
+                pass
+        task['last_collect'] = now
         task['next_collect'] = _advance_deadline(task['next_collect'], task['collect_ms'], now)
 
     if utime.ticks_diff(now, task['next_publish']) >= 0:
@@ -181,9 +201,12 @@ def _tick_flow(task, now, device, topic):
         try:
             _client.publish(topic, ujson.dumps({'header': header, 'payload': payload}))
         except OSError:
-            # falha de transporte: atrasa próxima tentativa e propaga
+            task['errors'] += 1
+            task['total_errors'] += 1
             task['next_publish'] = utime.ticks_add(now, _RETRY_MS)
             raise
+        task['last_publish'] = now
+        task['errors'] = 0
         task['next_publish'] = _advance_deadline(task['next_publish'], task['publish_ms'], now)
         for name in task['buf']:
             task['buf'][name] = []
@@ -212,9 +235,15 @@ def _tick_event(task, now, device, topic):
             try:
                 _client.publish(topic, ujson.dumps({'header': header, 'payload': payload}))
             except OSError:
+                task['errors'] += 1
+                task['total_errors'] += 1
                 task['next_collect'] = utime.ticks_add(now, _RETRY_MS)
                 raise
+            task['last_publish'] = now
+            task['samples'] += 1
+            task['errors'] = 0
 
+        task['last_collect'] = now
         task['next_collect'] = _advance_deadline(task['next_collect'], task['collect_ms'], now)
 
 
@@ -230,6 +259,6 @@ def tick():
             elif task['method'] == 'EVENT':
                 _tick_event(task, now, device, topic)
         except OSError:
-            raise  # falha de transporte → boot.py incrementa _dead_count e reconecta
+            raise
         except Exception:
-            pass   # falha de sensor ou encoding → ignora esta tarefa
+            pass

@@ -146,7 +146,7 @@ def ledActuator(value=None):
 
 | File | Hardware | TATU variables | Notes |
 |------|----------|----------------|-------|
-| [`src/tatu/sensors.py`](src/tatu/sensors.py) | Any ESP8266 | DHT11 on GPIO15 → `temperatureSensor`, `humiditySensor` | Default — integer values |
+| [`src/tatu/sensors.py`](src/tatu/sensors.py) | Any ESP8266 | DHT22 on GPIO12 (D6) → `temperatureSensor`, `humiditySensor` | Default — float values; cache expires after 30 s without a valid read |
 | [`examples/sensors_dht22.py`](examples/sensors_dht22.py) | Any ESP8266 | DHT22 on GPIO15 → `temperatureSensor`, `humiditySensor` | Float values, higher precision |
 | [`examples/sensors_esp8266_grove.py`](examples/sensors_esp8266_grove.py) | ESP8266 + Grove Shield (WeMos D1 Mini) | DHT22 on D4/GPIO2 → `temperatureSensor`, `humiditySensor`; Light on A0 → `lightSensor` | Ready for Grove Shield |
 
@@ -203,6 +203,8 @@ Use `"sensor": "esp8266-01"` (the device name) to read **all** sensors at once.
 
 Collects values every `collect` seconds and publishes a batch every `publish` seconds.
 
+**Constraints:** `collect` and `publish` must be positive integers, and `publish` must be ≥ `collect`. Invalid values produce an error on `/ERR` and the task is not created.
+
 Request:
 ```json
 {"method": "FLOW", "sensor": "temperatureSensor", "time": {"collect": 5, "publish": 30}}
@@ -226,6 +228,8 @@ Runs continuously until a STOP command is received.
 ### EVENT — change detection
 
 Polls the sensor every `collect` seconds and publishes only when the value changes.
+
+**Constraints:** `collect` must be a positive integer. Invalid values produce an error on `/ERR` and the task is not created.
 
 Request:
 ```json
@@ -294,7 +298,10 @@ Practical limit: **4–6 concurrent FLOW/EVENT tasks** before heap pressure caus
 
 ### Reconnection
 
-`boot.py` implements automatic reconnection for both WiFi and MQTT. If 3 consecutive loop errors are detected, or a keepalive ping fails, it re-runs the WiFi + MQTT connect sequence without rebooting the device.
+`boot.py` implements automatic reconnection at two points:
+
+- **Boot time:** `_boot_connect()` retries WiFi + MQTT with exponential backoff (2 s → 4 → 8 → … → 30 s cap) until the device is connected. The device never halts on a failed first connection.
+- **Runtime:** if 3 consecutive loop errors are detected, or a keepalive ping fails, the WiFi + MQTT connect sequence is re-run without rebooting the device. Active FLOW and EVENT tasks survive reconnection; their deadlines are advanced to skip missed periods.
 
 ### Hidden SSIDs
 

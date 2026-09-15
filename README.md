@@ -351,6 +351,7 @@ ampy --port /dev/ttyUSB0 put src/tatu/boot.py /boot.py
 
 ## Related projects
 
+- [soft-iot-tatu-spec](https://github.com/WiserUFBA/soft-iot-tatu-spec) — canonical protocol specification
 - [soft-iot-tatu-python](https://github.com/WiserUFBA/soft-iot-tatu-python) — CPython version (Raspberry Pi, PC)
 - [MicroPython documentation](https://docs.micropython.org/en/latest/)
 - [umqtt library](https://github.com/micropython/micropython-lib/tree/master/micropython/umqtt.simple)
